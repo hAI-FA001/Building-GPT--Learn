@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
 # hyperparams
 BATCH_SIZE = 32
 BLOCK_SIZE = 8
@@ -11,7 +12,9 @@ EVAL_ITERS = 200  # model's loss will be calcuated this many times during evalua
 LEARNING_RATE = 1e-2
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'  # to use GPU if possible
 
+
 torch.manual_seed(1337)
+
 
 def read_data():
     with open('input.txt', 'r', encoding='utf-8') as f:
