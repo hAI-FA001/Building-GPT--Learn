@@ -94,13 +94,25 @@ class BigramLM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, N_EMBD)
+        # ths is BLOCK_SIZE by N_EMBD
+        # why BLOCK_SIZE, why not vocab_size here? we want positional embeddings for each position in the input vector -> length of vector != size of vocab
+        self.pos_emb_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
     def forward(self, idx, targets=None):
+        B, T = idx.shape
+
         # now, table doesn't give us logits directly
-        # it givues us embeddings of the tokens (this is how we interpret it now, it's still just some numbers)
+        # it gives us embeddings of the tokens (this is how we interpret it now, it's still just some numbers)
         token_emb = self.token_emb_table(idx)  # (B, T, C)
-        logits = self.lm_head(token_emb)  # (B, T, vocab_size C)
+        # torch.arange() gives numbers 0 to T-1
+        # all these numbers will be embedded through the table
+        pos_emb = self.pos_emb_table(torch.arange(T, device=DEVICE))  # (T, C)
+        # now x contains pos info too
+        # Note: this pos info isn't useful for BigramLM
+        # Bigram just uses prev token, so it doesn't matter whether you're at position 5 or some other (it is "translation invariant")
+        x = token_emb + pos_emb  # (B, T, C), pos_emb will be broadcasted across batch (i.e. (T, C) -> (B, T, C))
+        logits = self.lm_head(x)  # (B, T, vocab_size C)
         
         if targets is None:
             loss = None
