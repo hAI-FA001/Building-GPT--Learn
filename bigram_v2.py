@@ -126,7 +126,8 @@ class BigramLM(nn.Module):
     
     def generate(self, idx, max_new_tokens):
         for _ in range(max_new_tokens):
-            logits, loss = self(idx)
+            idx_in = idx[:, -BLOCK_SIZE:]  # only feed last BLOCK_SIZE tokens
+            logits, loss = self(idx_in)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
