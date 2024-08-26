@@ -6,10 +6,10 @@ from torch.nn import functional as F
 # hyperparams
 BATCH_SIZE = 32
 BLOCK_SIZE = 8
-MAX_ITERS = 3_000
-EVAL_INTERVAL = 300  # model will be evaluated after every EVAL_INTERVAL iterations
+MAX_ITERS = 5_000
+EVAL_INTERVAL = 500  # model will be evaluated after every EVAL_INTERVAL iterations
 EVAL_ITERS = 200  # model's loss will be calcuated this many times during evaluation
-LEARNING_RATE = 1e-2
+LEARNING_RATE = 1e-3  # this was 1e-2 previously, Self-Attention can't tolerate large learning rates
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'  # to use GPU if possible
 
 N_EMBD = 32  # embedding dimension
@@ -90,6 +90,38 @@ def estimate_loss(model, get_batch):
     return out
 
 
+class Head(nn.Module):
+    def __init__(self, head_size):
+        super().__init__()
+
+        self.key = nn.Linear(N_EMBD, head_size, bias=False)
+        self.query = nn.Linear(N_EMBD, head_size, bias=False)
+        self.value = nn.Linear(N_EMBD, head_size, bias=False)
+
+        # register_buffer is used to create variables that are not model parameters
+        self.register_buffer('tril', torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE)))
+        self.register_buffer('head_size', torch.ones(1) * head_size)
+
+    def forward(self, x):
+        B, T, C = x.shape
+
+        # (B, T, C)
+        k = self.key(x)
+        q = self.query(x)
+
+        # (B, T, C) @ (B, C, T) -> (B, T, T)
+        wei = q @ k.transpose(-2, -1) * (self.head_size**-0.5)
+        # (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))  # this makes it a Decoder block
+        wei = F.softmax(wei, dim=-1)
+        
+        v = self.value(x)
+        # (B, T, T) @ (B, T, C) -> (B, T, C)
+        out = wei @ v
+
+        return out
+
+
 class BigramLM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
@@ -97,6 +129,7 @@ class BigramLM(nn.Module):
         # ths is BLOCK_SIZE by N_EMBD
         # why BLOCK_SIZE, why not vocab_size here? we want positional embeddings for each position in the input vector -> length of vector != size of vocab
         self.pos_emb_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
+        self.sa_head = Head(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
     def forward(self, idx, targets=None):
@@ -112,6 +145,11 @@ class BigramLM(nn.Module):
         # Note: this pos info isn't useful for BigramLM
         # Bigram just uses prev token, so it doesn't matter whether you're at position 5 or some other (it is "translation invariant")
         x = token_emb + pos_emb  # (B, T, C), pos_emb will be broadcasted across batch (i.e. (T, C) -> (B, T, C))
+        
+        # apply 1 head of Self-Attention
+        # (B, T, C)
+        x = self.sa_head(x)
+        
         logits = self.lm_head(x)  # (B, T, vocab_size C)
         
         if targets is None:
@@ -126,7 +164,7 @@ class BigramLM(nn.Module):
     
     def generate(self, idx, max_new_tokens):
         for _ in range(max_new_tokens):
-            idx_in = idx[:, -BLOCK_SIZE:]  # only feed last BLOCK_SIZE tokens
+            idx_in = idx[:, -BLOCK_SIZE:]  # only feed last BLOCK_SIZE tokens, to avoid out-of-bounds for our positional embedding table
             logits, loss = self(idx_in)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
