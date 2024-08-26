@@ -131,6 +131,20 @@ class MultiHeadAttention(nn.Module):
         # concat over the channel dim (the C in (B, T, C))
         return torch.cat([h(x) for h in self.heads], dim=-1)
 
+class FeedForward(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+
+        # same as the one in "Attention Is All You Need"
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU()
+        )
+    
+    def forward(self, x):
+        # this is on a per-token level: all tokens do this independently
+        return self.net(x)
+
 class BigramLM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
@@ -142,6 +156,7 @@ class BigramLM(nn.Module):
         # 4 heads and each give 8-dim vector, so result after concatenating is 4*8 = 32-dim vector (in channel dim)
         # this is like group convolutions: instead of 1 large conv, we do multiple smaller convs
         self.sa_heads = MultiHeadAttention(4, N_EMBD // 4)
+        self.ffwd = FeedForward(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
     def forward(self, idx, targets=None):
@@ -161,6 +176,10 @@ class BigramLM(nn.Module):
         # apply 1 head of Self-Attention
         # (B, T, C)
         x = self.sa_heads(x)
+        # think like this:
+        # with MH-SA, tokens looked at each other
+        # but didn't have time to think on what they found from the other tokens
+        x = self.ffwd(x)
         
         logits = self.lm_head(x)  # (B, T, vocab_size C)
         
