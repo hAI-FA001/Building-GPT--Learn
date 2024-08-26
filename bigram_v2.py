@@ -5,14 +5,17 @@ from torch.nn import functional as F
 
 # hyperparams
 BATCH_SIZE = 32
-BLOCK_SIZE = 8
+BLOCK_SIZE = 256  # max context length
 MAX_ITERS = 5_000
 EVAL_INTERVAL = 500  # model will be evaluated after every EVAL_INTERVAL iterations
 EVAL_ITERS = 200  # model's loss will be calcuated this many times during evaluation
-LEARNING_RATE = 1e-3  # this was 1e-2 previously, Self-Attention can't tolerate large learning rates
+LEARNING_RATE = 3e-4  # this was 1e-2 previously, Self-Attention can't tolerate large learning rates
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'  # to use GPU if possible
 
-N_EMBD = 32  # embedding dimension
+N_EMBD = 384  # embedding dimension
+N_HEAD = 6  # number of SA heads in MHSA
+N_LAYER = 6  # number of MHSA blocks
+DROPOUT = 0.2  # dropout probability
 
 
 torch.manual_seed(1337)
@@ -102,6 +105,8 @@ class Head(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE)))
         self.register_buffer('head_size', torch.ones(1) * head_size)
 
+        self.dropout = nn.Dropout(DROPOUT)
+
     def forward(self, x):
         B, T, C = x.shape
 
@@ -114,6 +119,8 @@ class Head(nn.Module):
         # (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))  # this makes it a Decoder block
         wei = F.softmax(wei, dim=-1)
+        # randomly prevent some nodes from communicating
+        wei = self.dropout(wei)
         
         v = self.value(x)
         # (B, T, T) @ (B, T, C) -> (B, T, C)
@@ -127,11 +134,13 @@ class MultiHeadAttention(nn.Module):
 
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(N_EMBD, N_EMBD)
+        self.dropout = nn.Dropout(DROPOUT)
     
     def forward(self, x):
         # concat over the channel dim (the C in (B, T, C))
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.proj(out)  # project back into the residual pathway
+        out = self.dropout(out)
         return out
 
 class FeedForward(nn.Module):
@@ -146,7 +155,8 @@ class FeedForward(nn.Module):
             # add self-projection here too, like in MHSA
             # i.e. project back into the residual pathway
             # (by turning the dim back to n_embd i guess)
-            nn.Linear(4 * n_embd, n_embd)
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(DROPOUT)
         )
     
     def forward(self, x):
@@ -231,13 +241,8 @@ class BigramLM(nn.Module):
         # this is like group convolutions: instead of 1 large conv, we do multiple smaller convs
         # self.sa_heads = MultiHeadAttention(4, N_EMBD // 4)
         
-        self.blocks = nn.Sequential(
-            Block(N_EMBD, n_head=4),
-            Block(N_EMBD, n_head=4),
-            Block(N_EMBD, n_head=4),
-            # LayerNorm1d(N_EMBD)
-            nn.LayerNorm(N_EMBD)
-        )
+        self.blocks = nn.Sequential(*[Block(N_EMBD, N_HEAD) for _ in range(N_LAYER)])
+        self.ln_f = nn.LayerNorm(N_EMBD)
 
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
@@ -256,6 +261,7 @@ class BigramLM(nn.Module):
         x = token_emb + pos_emb  # (B, T, C), pos_emb will be broadcasted across batch (i.e. (T, C) -> (B, T, C))
         
         x = self.blocks(x)
+        x = self.ln_f(x)
         
         logits = self.lm_head(x)  # (B, T, vocab_size C)
         
