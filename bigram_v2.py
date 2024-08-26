@@ -126,10 +126,13 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
 
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(N_EMBD, N_EMBD)
     
     def forward(self, x):
         # concat over the channel dim (the C in (B, T, C))
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)  # project back into the residual pathway
+        return out
 
 class FeedForward(nn.Module):
     def __init__(self, n_embd):
@@ -137,8 +140,13 @@ class FeedForward(nn.Module):
 
         # same as the one in "Attention Is All You Need"
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
-            nn.ReLU()
+            # in "Attention Is All You Need", there's a multiplier of 4 for the inner dimension of feed forward
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            # add self-projection here too, like in MHSA
+            # i.e. project back into the residual pathway
+            # (by turning the dim back to n_embd i guess)
+            nn.Linear(4 * n_embd, n_embd)
         )
     
     def forward(self, x):
@@ -159,12 +167,24 @@ class Block(nn.Module):
 
     def forward(self, x):
         # the Block intersperses the communication and computation
+
+        # with many Blocks, this becomes a very deep NN
+        # and suffers from optimization issues
+        # to fix this, we add skip connections/residual connections
+        #   distributes gradients equally to both branches
+        #     i guess it's because when we backprop through this addition step, it gives equal weight to both branches
+        #   skip connection provides the gradients with an "unimpeded highway"
+        #     the gradients can directly backprop to the input through this residual pathway
+        #     the blocks in non-residual pathway are initialized such that they don't contribute initially (as if they're not there)
+        #       over time, with backprop/optimizations, they come online and start to contribute
         
-        x = self.sa(x)  # communication
-        # think like this:
-        # with MH-SA, tokens looked at each other
-        # but didn't have time to think on what they found from the other tokens
-        x = self.ffwd(x)  # computation
+
+        x = x + self.sa(x)  # communication
+        # why add feed-forward? think like this:
+        #   with MH-SA, tokens looked at each other
+        #   but didn't have time to think on what they found from the other tokens
+        x = x + self.ffwd(x)  # computation
+
         return x
 
 class BigramLM(nn.Module):
