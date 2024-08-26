@@ -145,6 +145,28 @@ class FeedForward(nn.Module):
         # this is on a per-token level: all tokens do this independently
         return self.net(x)
 
+class Block(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+
+        # we calculate head_size so everything works out channel-wise
+        # i.e. each head has 'n_embd/n_head' size
+        # so when we concat 'n_head' heads, it'll give back: n_head * n_embd/n_head = n_embd
+        # and n_embd is what we want as the channel dim
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+
+    def forward(self, x):
+        # the Block intersperses the communication and computation
+        
+        x = self.sa(x)  # communication
+        # think like this:
+        # with MH-SA, tokens looked at each other
+        # but didn't have time to think on what they found from the other tokens
+        x = self.ffwd(x)  # computation
+        return x
+
 class BigramLM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
@@ -152,11 +174,19 @@ class BigramLM(nn.Module):
         # ths is BLOCK_SIZE by N_EMBD
         # why BLOCK_SIZE, why not vocab_size here? we want positional embeddings for each position in the input vector -> length of vector != size of vocab
         self.pos_emb_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
+        
+        # OLD CODE - keeping it for the explanation
         # because we have 4 communication channels now (4 heads), head_size would typically be smaller
         # 4 heads and each give 8-dim vector, so result after concatenating is 4*8 = 32-dim vector (in channel dim)
         # this is like group convolutions: instead of 1 large conv, we do multiple smaller convs
-        self.sa_heads = MultiHeadAttention(4, N_EMBD // 4)
-        self.ffwd = FeedForward(N_EMBD)
+        # self.sa_heads = MultiHeadAttention(4, N_EMBD // 4)
+        
+        self.blocks = nn.Sequential(
+            Block(N_EMBD, n_head=4),
+            Block(N_EMBD, n_head=4),
+            Block(N_EMBD, n_head=4),
+        )
+
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
     def forward(self, idx, targets=None):
@@ -173,13 +203,7 @@ class BigramLM(nn.Module):
         # Bigram just uses prev token, so it doesn't matter whether you're at position 5 or some other (it is "translation invariant")
         x = token_emb + pos_emb  # (B, T, C), pos_emb will be broadcasted across batch (i.e. (T, C) -> (B, T, C))
         
-        # apply 1 head of Self-Attention
-        # (B, T, C)
-        x = self.sa_heads(x)
-        # think like this:
-        # with MH-SA, tokens looked at each other
-        # but didn't have time to think on what they found from the other tokens
-        x = self.ffwd(x)
+        x = self.blocks(x)
         
         logits = self.lm_head(x)  # (B, T, vocab_size C)
         
