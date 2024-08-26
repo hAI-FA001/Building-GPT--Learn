@@ -315,6 +315,8 @@ if __name__ == "__main__":
     model = BigramLM(vocab_size)
     # need to keep data and model on same device (CPU or GPU)
     m = model.to(DEVICE)
+    print(f"Total {sum(p.numel() for p in m.parameters())/1e6}M parameters")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     train(model, optimizer, get_batch)
