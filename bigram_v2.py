@@ -168,8 +168,9 @@ class LayerNorm1d:
         # here, we normalize the rows instead
         # these calculations follow the equation for LayerNorm used in PyTorch
         
-        xmean = x.mean(1, keepdim=True)
-        xvar = x.var(1, keepdim=True)
+        xmean = x.mean(-1, keepdim=True)
+        xvar = x.var(-1, keepdim=True)
+
         xhat = (x - xmean) / torch.sqrt(xvar + self.eps)
 
         self.out = self.gamma * xhat + self.beta
@@ -187,8 +188,8 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embd)
-        self.ln1 = LayerNorm1d(n_embd)
-        self.ln2 = LayerNorm1d(n_embd)
+        self.ln1 = nn.LayerNorm(N_EMBD)#LayerNorm1d(n_embd)
+        self.ln2 = nn.LayerNorm(N_EMBD)#LayerNorm1d(n_embd)
 
     def forward(self, x):
         # the Block intersperses the communication and computation
@@ -234,6 +235,8 @@ class BigramLM(nn.Module):
             Block(N_EMBD, n_head=4),
             Block(N_EMBD, n_head=4),
             Block(N_EMBD, n_head=4),
+            # LayerNorm1d(N_EMBD)
+            nn.LayerNorm(N_EMBD)
         )
 
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
