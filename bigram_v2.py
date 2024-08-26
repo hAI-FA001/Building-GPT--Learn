@@ -153,6 +153,29 @@ class FeedForward(nn.Module):
         # this is on a per-token level: all tokens do this independently
         return self.net(x)
 
+class LayerNorm1d:
+    def __init__(self, dim, eps=1e-5):
+        self.eps = eps  # for numerical stability
+        # lets the model stretch the result (is like w in wx + b)
+        # which means the model can choose what variance the output should have
+        self.gamma = torch.ones(dim)
+        # lets the model offset the result (is like b in wx + b)
+        # which means the model can choose what mean the output should have
+        self.beta = torch.zeros(dim)
+    
+    def __call__(self, x):
+        # in BatchNorm, we normalize the columns and distinguish b/w Training and Testing modes
+        # here, we normalize the rows instead
+        # these calculations follow the equation for LayerNorm used in PyTorch
+        
+        xmean = x.mean(1, keepdim=True)
+        xvar = x.var(1, keepdim=True)
+        xhat = (x - xmean) / torch.sqrt(xvar + self.eps)
+
+        self.out = self.gamma * xhat + self.beta
+
+        return self.out
+
 class Block(nn.Module):
     def __init__(self, n_embd, n_head):
         super().__init__()
@@ -164,6 +187,8 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = LayerNorm1d(n_embd)
+        self.ln2 = LayerNorm1d(n_embd)
 
     def forward(self, x):
         # the Block intersperses the communication and computation
@@ -178,12 +203,16 @@ class Block(nn.Module):
         #     the blocks in non-residual pathway are initialized such that they don't contribute initially (as if they're not there)
         #       over time, with backprop/optimizations, they come online and start to contribute
         
+        # the 2nd fix is to use LayerNorm
+        # slight change from "Attention Is All You Need":
+        #   we apply LayerNorm *before* any transformation
+        #   this is called Pre-Norm
 
-        x = x + self.sa(x)  # communication
+        x = x + self.sa(self.ln1(x))  # communication
         # why add feed-forward? think like this:
         #   with MH-SA, tokens looked at each other
         #   but didn't have time to think on what they found from the other tokens
-        x = x + self.ffwd(x)  # computation
+        x = x + self.ffwd(self.ln2(x))  # computation
 
         return x
 
