@@ -121,6 +121,15 @@ class Head(nn.Module):
 
         return out
 
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+    
+    def forward(self, x):
+        # concat over the channel dim (the C in (B, T, C))
+        return torch.cat([h(x) for h in self.heads], dim=-1)
 
 class BigramLM(nn.Module):
     def __init__(self, vocab_size):
@@ -129,7 +138,10 @@ class BigramLM(nn.Module):
         # ths is BLOCK_SIZE by N_EMBD
         # why BLOCK_SIZE, why not vocab_size here? we want positional embeddings for each position in the input vector -> length of vector != size of vocab
         self.pos_emb_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
-        self.sa_head = Head(N_EMBD)
+        # because we have 4 communication channels now (4 heads), head_size would typically be smaller
+        # 4 heads and each give 8-dim vector, so result after concatenating is 4*8 = 32-dim vector (in channel dim)
+        # this is like group convolutions: instead of 1 large conv, we do multiple smaller convs
+        self.sa_heads = MultiHeadAttention(4, N_EMBD // 4)
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
     
     def forward(self, idx, targets=None):
@@ -148,7 +160,7 @@ class BigramLM(nn.Module):
         
         # apply 1 head of Self-Attention
         # (B, T, C)
-        x = self.sa_head(x)
+        x = self.sa_heads(x)
         
         logits = self.lm_head(x)  # (B, T, vocab_size C)
         
