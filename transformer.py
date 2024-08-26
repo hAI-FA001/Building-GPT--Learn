@@ -227,7 +227,7 @@ class Block(nn.Module):
 
         return x
 
-class BigramLM(nn.Module):
+class TransformerLM(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
         self.token_emb_table = nn.Embedding(vocab_size, N_EMBD)
@@ -312,7 +312,7 @@ if __name__ == "__main__":
     data = torch.tensor(encode(data), dtype=torch.long)
     train_data, val_data = train_test(0.9, data)
 
-    model = BigramLM(vocab_size)
+    model = TransformerLM(vocab_size)
     # need to keep data and model on same device (CPU or GPU)
     m = model.to(DEVICE)
     print(f"Total {sum(p.numel() for p in m.parameters())/1e6}M parameters")
